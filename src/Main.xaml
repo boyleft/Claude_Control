@@ -1,0 +1,75 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Claude 控制台" Width="546" Height="445" ResizeMode="CanMinimize"
+        SizeToContent="Height" WindowStartupLocation="CenterScreen"
+        Background="#FAF9F5" FontFamily="Microsoft YaHei UI, Segoe UI" TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True">
+  <Window.Resources>
+    <Style x:Key="Action" TargetType="Button">
+      <Setter Property="Foreground" Value="#281A14"/><Setter Property="Background" Value="#D97757"/>
+      <Setter Property="Cursor" Value="Hand"/><Setter Property="FontSize" Value="15"/>
+      <Setter Property="FontWeight" Value="SemiBold"/><Setter Property="Padding" Value="15,10"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+        <Border x:Name="Surface" CornerRadius="8" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+          <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <ControlTemplate.Triggers>
+          <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Opacity" Value=".86"/></Trigger>
+          <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Opacity" Value=".70"/></Trigger>
+          <Trigger Property="IsEnabled" Value="False"><Setter TargetName="Surface" Property="Opacity" Value=".52"/></Trigger>
+        </ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
+    </Style>
+  </Window.Resources>
+  <StackPanel Margin="27,22,27,19">
+    <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+      <Border Background="#D97757" Width="40" Height="40" CornerRadius="12">
+        <Grid Width="24" Height="24">
+          <Ellipse Stroke="#542D20" StrokeThickness="1.6" Margin="1"/>
+          <Rectangle Fill="#362219" RadiusX="1.6" RadiusY="1.6" Width="8" Height="8"/>
+        </Grid>
+      </Border>
+      <TextBlock Margin="12,0,0,0" Text="Claude 控制台" FontSize="24" FontWeight="SemiBold" Foreground="#201B18" VerticalAlignment="Center"/>
+    </StackPanel>
+    <Border Background="White" BorderBrush="#E8E6DC" BorderThickness="1" CornerRadius="12" Padding="20,17">
+      <StackPanel>
+        <Grid>
+          <TextBlock Text="本机运行状态" FontSize="13" FontWeight="SemiBold" Foreground="#574C46" VerticalAlignment="Center"/>
+          <Border Background="#F7EAE2" CornerRadius="11" HorizontalAlignment="Right" Padding="10,3">
+            <StackPanel Orientation="Horizontal"><Ellipse x:Name="Lamp" Fill="#958C85" Width="7" Height="7" Margin="0,0,6,0"/>
+              <TextBlock x:Name="Status" Text="检测中" Foreground="#674231" FontSize="12"/></StackPanel>
+          </Border>
+        </Grid>
+        <TextBlock x:Name="Count" Text="正在读取进程…" FontSize="23" FontWeight="SemiBold" Foreground="#201B18" Margin="0,12,0,3"/>
+        <TextBlock x:Name="Service" Text="正在读取后台服务状态" Foreground="#635953" FontSize="13" Margin="0,0,0,16"/>
+        <Expander Header="查看进程明细" Margin="0,0,0,12" Foreground="#574C46" FontSize="12">
+          <ScrollViewer MaxHeight="108" VerticalScrollBarVisibility="Auto" Margin="5,7,0,0"><TextBlock x:Name="Details" TextWrapping="Wrap"/></ScrollViewer>
+        </Expander>
+        <Button x:Name="Stop" Style="{StaticResource Action}" AutomationProperties.Name="关闭 Claude">
+          <StackPanel Orientation="Horizontal"><Rectangle Width="11" Height="11" Fill="#281A14" RadiusX="2" RadiusY="2" Margin="0,0,10,0"/>
+            <TextBlock x:Name="StopLabel" Text="关闭 Claude"/></StackPanel>
+        </Button>
+      </StackPanel>
+    </Border>
+    <Border Margin="0,12,0,0" Background="White" BorderBrush="#E8E6DC" BorderThickness="1" CornerRadius="12" Padding="17,14">
+      <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+        <StackPanel>
+          <TextBlock Text="桌面悬浮标" Foreground="#28221E" FontSize="15" FontWeight="SemiBold"/>
+          <TextBlock Text="双击打开主窗口，悬停显示关闭按钮，按住左键拖动。" Foreground="#635953" FontSize="12" Margin="0,4,0,0"/>
+        </StackPanel>
+        <CheckBox x:Name="FloatToggle" Grid.Column="1" Cursor="Hand" VerticalAlignment="Center" ToolTip="开启或关闭桌面悬浮标" AutomationProperties.Name="桌面悬浮标">
+          <CheckBox.Template><ControlTemplate TargetType="CheckBox">
+            <Border x:Name="Track" Background="#B0AEA5" Width="42" Height="24" CornerRadius="12" Padding="3">
+              <Ellipse x:Name="Knob" Fill="White" Width="18" HorizontalAlignment="Left"/>
+            </Border>
+            <ControlTemplate.Triggers><Trigger Property="IsChecked" Value="True">
+              <Setter TargetName="Track" Property="Background" Value="#D97757"/><Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right"/>
+            </Trigger></ControlTemplate.Triggers>
+          </ControlTemplate></CheckBox.Template>
+        </CheckBox>
+      </Grid>
+    </Border>
+    <TextBlock x:Name="Feedback" Margin="2,13,2,0" TextWrapping="Wrap" Foreground="#60554E" FontSize="12"
+               Text="关闭 Claude 会结束当前会话及其后台进程。"/>
+  </StackPanel>
+</Window>
