@@ -17,9 +17,9 @@ using Drawing = System.Drawing;
 using Forms = System.Windows.Forms;
 using Shapes = System.Windows.Shapes;
 
-[assembly: AssemblyTitle("Claude 控制台")]
-[assembly: AssemblyProduct("Claude 控制台")]
-[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyTitle("Claude 与 ChatGPT 控制台")]
+[assembly: AssemblyProduct("Claude 与 ChatGPT 控制台")]
+[assembly: AssemblyVersion("1.1.0.0")]
 namespace ClaudeControl
 {
     internal static class Program
@@ -41,7 +41,7 @@ namespace ClaudeControl
                     }, null, Timeout.Infinite, false);
                     try { desk.Show(); app.Run(); } finally { wake.Unregister(null); desk.Dispose(); }
                 } catch (Exception ex) {
-                    MessageBox.Show(ex.GetBaseException().Message,"Claude 控制台",MessageBoxButton.OK,MessageBoxImage.Error); return 1;
+                    MessageBox.Show(ex.GetBaseException().Message,"Claude 与 ChatGPT 控制台",MessageBoxButton.OK,MessageBoxImage.Error); return 1;
                 }
             }
             return 0;
@@ -53,17 +53,17 @@ namespace ClaudeControl
         private readonly FloatingControl floating;
         private readonly Forms.NotifyIcon tray=new Forms.NotifyIcon();
         private readonly Forms.ContextMenuStrip menu=new Forms.ContextMenuStrip();
-        private readonly Forms.ToolStripMenuItem trayStop, trayFloat;
+        private readonly Forms.ToolStripMenuItem trayFloat;
         private readonly Drawing.Icon icon;
-        private readonly ProcessTree tree=new ProcessTree(Installation.Owns, -1, true);
-        private Dictionary<int,long> known=new Dictionary<int,long>();
+        private readonly Target claude, gpt;
         private readonly DispatcherTimer timer=new DispatcherTimer { Interval=TimeSpan.FromSeconds(5) };
         private readonly CheckBox toggle;
-        private readonly Button stop;
-        private readonly TextBlock status, count, service, details, feedback, stopLabel;
+        private readonly TextBlock status, count, service, details, feedback;
         private const string Prefs=@"HKEY_CURRENT_USER\Software\ClaudeControlDesk";
         private int? x=Pref("X"), y=Pref("Y");
-        private bool busy, reading, quitting, active;
+        private DesktopApp? stopping;
+        private bool busy { get { return stopping.HasValue; } }
+        private bool reading, quitting, active;
         private int generation;
         private Window exitDialog;
         private static int? Pref(string name) { return Registry.GetValue(Prefs,name,null) as int?; }
@@ -75,20 +75,20 @@ namespace ClaudeControl
                 window=(Window)XamlReader.Load(stream);
             icon=Drawing.Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);
             window.Icon=Imaging.CreateBitmapSourceFromHIcon(icon.Handle,Int32Rect.Empty,System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
-            toggle=Find<CheckBox>("FloatToggle"); stop=Find<Button>("Stop"); status=Find<TextBlock>("Status");
+            toggle=Find<CheckBox>("FloatToggle"); status=Find<TextBlock>("Status");
             count=Find<TextBlock>("Count"); service=Find<TextBlock>("Service"); details=Find<TextBlock>("Details");
-            feedback=Find<TextBlock>("Feedback"); stopLabel=Find<TextBlock>("StopLabel");
-            floating=new FloatingControl((Style)window.FindResource("Action"),RequestStop,Show,delegate(int left,int top){
+            feedback=Find<TextBlock>("Feedback");
+            menu.Items.Add("打开控制台",null,delegate { Show(); });
+            claude=AddTarget(DesktopApp.Claude,"Stop","StopLabel","关闭 Claude");
+            gpt=AddTarget(DesktopApp.ChatGpt,"StopGpt","GptLabel","关闭 GPT");
+            floating=new FloatingControl((Style)window.FindResource("Action"),()=>RequestStop(claude),()=>RequestStop(gpt),Show,delegate(int left,int top){
                 x=left; y=top; Write("X",left); Write("Y",top);
             });
-            menu.Items.Add("打开控制台",null,delegate { Show(); });
-            trayStop=(Forms.ToolStripMenuItem)menu.Items.Add("关闭 Claude",null,delegate { RequestStop(); });
             trayFloat=(Forms.ToolStripMenuItem)menu.Items.Add("桌面悬浮标",null,delegate { toggle.IsChecked=toggle.IsChecked!=true; });
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("退出控制台",null,delegate { Exit(); });
-            tray.Icon=icon; tray.Text="Claude 控制台"; tray.ContextMenuStrip=menu; tray.Visible=true;
+            tray.Icon=icon; tray.Text=window.Title; tray.ContextMenuStrip=menu; tray.Visible=true;
             tray.MouseClick += delegate(object sender, Forms.MouseEventArgs e) { if (e.Button==Forms.MouseButtons.Left) Show(); };
-            stop.Click += delegate { RequestStop(); };
             toggle.Checked += ChangeFloat; toggle.Unchecked += ChangeFloat;
             window.Closing += Closing;
             window.Loaded += delegate { toggle.IsChecked=Pref("Float")==1; ReadState(); timer.Start(); };
@@ -104,34 +104,73 @@ namespace ClaudeControl
             window.Show(); window.WindowState=WindowState.Normal; window.Activate();
             if (exitDialog!=null) exitDialog.Activate();
         }
+        private sealed class Target
+        {
+            internal DesktopApp App;
+            internal string Name;
+            internal ProcessTree Tree;
+            internal Button Button;
+            internal TextBlock Label;
+            internal Forms.ToolStripMenuItem Menu;
+            internal State Current=new State();
+            internal Dictionary<int,long> Known=new Dictionary<int,long>();
+            internal void Accept(State state)
+            {
+                Current=state;
+                if (state.Error==null) Known=state.Nodes.Where(n=>!n.Unverified).ToDictionary(n=>n.Id,n=>n.Birth);
+            }
+            internal State Inspect(Dictionary<int,long> known)
+            {
+                var state=new State();
+                try {
+                    state.Nodes=Tree.Scan(known);
+                    if (App==DesktopApp.Claude) state.Service=BackgroundService.Active();
+                } catch (Exception ex) { state.Error=ex.GetBaseException().Message; }
+                return state;
+            }
+        }
+        private Target AddTarget(DesktopApp app,string button,string label,string caption)
+        {
+            var target=new Target { App=app, Name=app==DesktopApp.Claude?"Claude":"ChatGPT", Tree=new ProcessTree(app),
+                Button=Find<Button>(button), Label=Find<TextBlock>(label) };
+            target.Menu=(Forms.ToolStripMenuItem)menu.Items.Add(caption,null,delegate { RequestStop(target); });
+            target.Button.Click+=delegate { RequestStop(target); };
+            return target;
+        }
         private sealed class State
         {
-            internal List<Node> Nodes;
+            internal List<Node> Nodes=new List<Node>();
             internal bool Service;
+            internal string Error;
             internal bool Any { get { return Nodes.Count>0 || Service; } }
+            internal string Count { get { return Error==null?Nodes.Count(n=>!n.Unverified).ToString():"?"; } }
+            internal bool Uncertain { get { return Error!=null || Nodes.Any(n=>n.Unverified); } }
         }
-        private State Inspect(Dictionary<int,long> identities)
-        { return new State { Nodes=tree.Scan(identities), Service=BackgroundService.Active() }; }
-        private void Display(State s)
+        private void Display()
         {
-            active=s.Any;
-            known=s.Nodes.Where(n=>!n.Unverified).ToDictionary(n=>n.Id,n=>n.Birth);
-            int uncertain=s.Nodes.Count(n=>n.Unverified);
-            status.Text=uncertain>0 ? "待核实" : active ? "运行中" : "未运行";
-            count.Text=String.Format("{0} 个 Claude 关联进程",s.Nodes.Count-uncertain);
-            service.Text="Cowork 后台服务"+(s.Service?"正在运行":"未运行")+(uncertain>0?" · "+uncertain+" 个进程待核实":"");
-            details.Text=s.Nodes.Count==0?"Windows 登录会话中未发现匹配项。":String.Join("\n",s.Nodes.OrderBy(n=>n.Name).ThenBy(n=>n.Id)
-                .Select(n=>n.Name+"   ·   PID "+n.Id+(n.Unverified?"   归属待核实":"")));
+            State c=claude.Current, g=gpt.Current;
+            active=c.Any || g.Any;
+            status.Text=c.Uncertain || g.Uncertain ? "待核实" : active ? "运行中" : "未运行";
+            count.Text="Claude  "+c.Count+" 个    ·    ChatGPT  "+g.Count+" 个";
+            service.Text="Cowork 后台服务"+(c.Error!=null?"状态待核实":c.Service?"正在运行":"未运行");
+            var lines=new List<string>();
+            foreach(var target in new[]{claude,gpt}) {
+                if (target.Current.Error!=null) lines.Add(target.Name+" 检测失败："+target.Current.Error);
+                lines.AddRange(target.Current.Nodes.OrderBy(n=>n.Name).ThenBy(n=>n.Id)
+                    .Select(n=>target.Name+"   ·   "+n.Name+"   ·   PID "+n.Id+(n.Unverified?"   归属待核实":"")));
+            }
+            details.Text=lines.Count==0?"Windows 登录会话中未发现匹配项。":String.Join("\n",lines);
             Find<Shapes.Ellipse>("Lamp").Fill=FloatingControl.Color(active?"#A24C32":"#948C84");
-            floating.Update(busy,active);
+            floating.Update(stopping,active);
         }
         private async void ReadState()
         {
             if (reading || busy || quitting) return;
-            reading=true; int ticket=generation; var previous=known;
+            reading=true; int ticket=generation;
+            var priorClaude=claude.Known; var priorGpt=gpt.Known;
             try {
-                var state=await Task.Run(()=>Inspect(previous));
-                if (ticket==generation && !quitting) Display(state);
+                var states=await Task.Run(()=>new[]{claude.Inspect(priorClaude),gpt.Inspect(priorGpt)});
+                if (ticket==generation && !quitting) { claude.Accept(states[0]); gpt.Accept(states[1]); Display(); }
             } catch (Exception ex) { if (ticket==generation && !quitting) ShowError(ex); }
             finally { reading=false; }
         }
@@ -154,30 +193,38 @@ namespace ClaudeControl
                 }
             } catch (Win32Exception ex) { return ex.NativeErrorCode==1223?"管理员授权已取消。":ex.Message; }
         }
-        private async void RequestStop()
+        private void UpdateActions()
+        {
+            foreach(var target in new[]{claude,gpt}) {
+                target.Button.IsEnabled=target.Menu.Enabled=!busy;
+                target.Label.Text=stopping==target.App ? "正在关闭…" : target.Menu.Text;
+            }
+            floating.Update(stopping,active);
+        }
+        private async void RequestStop(Target target)
         {
             if (busy || quitting) return;
-            busy=true; generation++; stop.IsEnabled=false; trayStop.Enabled=false;
-            floating.Update(true,active); stopLabel.Text="正在关闭…"; status.Text="正在关闭";
-            feedback.Text="正在结束 Claude 关联进程。停止 Cowork 服务时，Windows 可能请求管理员权限。";
-            var identities=new Dictionary<int,long>(known);
+            stopping=target.App; generation++; UpdateActions(); status.Text="正在关闭";
+            feedback.Text="正在结束 "+target.Name+" 关联进程。"+(target==claude?"停止 Cowork 服务时，Windows 可能请求管理员权限。":"");
+            var identities=new Dictionary<int,long>(target.Known);
             var owner=new WindowInteropHelper(window).Handle;
             try {
                 string issue=await Task.Run(delegate {
-                    tree.Stop(identities);
-                    string problem=BackgroundService.Active() ? StopService(owner) : "";
-                    tree.Stop(identities);
+                    target.Tree.Stop(identities);
+                    if (target!=claude || !BackgroundService.Active()) return "";
+                    string problem=StopService(owner);
+                    target.Tree.Stop(identities);
                     return problem;
                 });
-                var state=await Task.Run(()=>Inspect(identities));
-                Display(state);
-                feedback.Text=!state.Any && issue.Length==0 ? "关闭检查完成。未发现仍在运行的匹配进程或 Cowork 服务。"
-                    : "关闭未完成。"+issue+(state.Nodes.Count>0?"请查看进程明细，可用管理员身份运行控制台后重试。":"")+
+                var state=await Task.Run(()=>target.Inspect(identities));
+                target.Accept(state); Display();
+                feedback.Text=!state.Any && state.Error==null && issue.Length==0 ? target.Name+" 关闭检查完成。未发现仍在运行的匹配进程"+(target==claude?"或 Cowork 服务。":"。")
+                    : target.Name+" 关闭未能确认。"+issue+state.Error+(state.Nodes.Count>0?"请查看进程明细，可用管理员身份运行控制台后重试。":"")+
                     (state.Service?" Cowork 服务仍在运行。":"");
             } catch (Exception ex) { ShowError(ex); }
             finally {
-                busy=false; stop.IsEnabled=true; trayStop.Enabled=true; stopLabel.Text="关闭 Claude"; floating.Update(false,active);
-                if (!window.IsVisible || floating.Flyout.IsActive) tray.ShowBalloonTip(3500,"Claude 控制台",feedback.Text,Forms.ToolTipIcon.Info);
+                stopping=null; UpdateActions();
+                if (!window.IsVisible || floating.Flyout.IsActive) tray.ShowBalloonTip(3500,window.Title,feedback.Text,Forms.ToolTipIcon.Info);
             }
         }
         private void Closing(object sender,CancelEventArgs e)

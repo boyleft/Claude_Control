@@ -16,8 +16,32 @@ using Microsoft.Win32.SafeHandles;
 
 namespace ClaudeControl
 {
+    internal enum DesktopApp { Claude, ChatGpt }
+
     internal static class Installation
     {
+        private static readonly Regex GptPackage = new Regex(
+            @"^(?<root>[A-Z]:\\(?:Program Files\\)?WindowsApps\\(?<package>OpenAI\.(?:ChatGPT-Desktop|ChatGPT|Codex))_[^\\]+__2p2nqsd0c76g0)\\(?<relative>.+)$",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        internal static bool OwnsGpt(string path)
+        {
+            var match=GptPackage.Match(path);
+            if (match.Success) {
+                if (!match.Groups["package"].Value.Equals("OpenAI.Codex",StringComparison.OrdinalIgnoreCase)) return true;
+                // The unified Windows app registers ChatGPT.exe as its main entry.
+                // A separate Codex frontend/CLI needs its own ancestry evidence.
+                string relative=match.Groups["relative"].Value;
+                if (relative.Equals(@"app\ChatGPT.exe",StringComparison.OrdinalIgnoreCase)) return true;
+                if (Path.GetFileName(relative).Equals("Codex.exe",StringComparison.OrdinalIgnoreCase)) return false;
+                return File.Exists(Path.Combine(match.Groups["root"].Value,@"app\ChatGPT.exe"));
+            }
+            if (!Path.GetFileName(path).Equals("ChatGPT.exe",StringComparison.OrdinalIgnoreCase)) return false;
+            try {
+                var version=FileVersionInfo.GetVersionInfo(path);
+                return (version.CompanyName ?? "").StartsWith("OpenAI",StringComparison.OrdinalIgnoreCase)
+                    && (version.ProductName ?? "").IndexOf("ChatGPT",StringComparison.OrdinalIgnoreCase)>=0;
+            } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
+        }
         private static readonly Regex Store = new Regex(
             @"^[A-Z]:\\(?:Program Files\\)?WindowsApps\\Claude_[^\\]+__pzs8sxrjxfjjc\\",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -85,6 +109,17 @@ namespace ClaudeControl
         [DllImport("kernel32", CharSet=CharSet.Unicode, SetLastError=true)] internal static extern bool Process32NextW(NativeHandle h, ref Entry e);
         [DllImport("kernel32", SetLastError=true)] internal static extern NativeHandle OpenProcess(uint access, bool inherit, int pid);
         [DllImport("kernel32", CharSet=CharSet.Unicode)] internal static extern bool QueryFullProcessImageNameW(NativeHandle h, uint flags, StringBuilder name, ref int capacity);
+        [DllImport("kernel32", CharSet=CharSet.Unicode, ExactSpelling=true)] private static extern int GetPackageFamilyName(NativeHandle h, ref uint length, StringBuilder family);
+        internal static bool IsGptWebView(NativeHandle process,string name)
+        {
+            if (!String.Equals(name,"msedgewebview2.exe",StringComparison.OrdinalIgnoreCase)) return false;
+            var family=new StringBuilder(128);
+            uint length=(uint)family.Capacity;
+            if (GetPackageFamilyName(process,ref length,family)!=0) return false;
+            string id=family.ToString();
+            return String.Equals(id,"OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0",StringComparison.OrdinalIgnoreCase)
+                || String.Equals(id,"OpenAI.ChatGPT_2p2nqsd0c76g0",StringComparison.OrdinalIgnoreCase);
+        }
         [DllImport("kernel32")] internal static extern bool GetProcessTimes(NativeHandle h, out long birth, out long exit, out long kernel, out long user);
         [DllImport("kernel32")] internal static extern bool ProcessIdToSessionId(int pid, out int session);
         [DllImport("kernel32")] internal static extern bool TerminateProcess(NativeHandle h, uint code);
@@ -103,10 +138,23 @@ namespace ClaudeControl
         private readonly int self = Process.GetCurrentProcess().Id;
         private readonly int session;
         private readonly bool checkNode;
+        private readonly Func<string,bool> otherApp;
+        private readonly bool gpt;
+        // These executables can broker launches for many independent desktop apps.
+        private static readonly HashSet<string> SharedHosts=new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
+            "explorer.exe","sihost.exe","svchost.exe","RuntimeBroker.exe","ApplicationFrameHost.exe","taskhostw.exe",
+            "chrome.exe","msedge.exe","firefox.exe","brave.exe","Code.exe","ClaudeControl.exe"
+        };
         private readonly object nodeLock=new object();
         private Dictionary<int,long> excludedNodes=new Dictionary<int,long>();
         internal ProcessTree(Func<string,bool> owns, int session, bool checkNode)
         { this.owns = owns; this.session = session; this.checkNode = checkNode; }
+        internal ProcessTree(DesktopApp target)
+            : this(target==DesktopApp.ChatGpt ? (Func<string,bool>)Installation.OwnsGpt : Installation.Owns, -1, target==DesktopApp.Claude)
+        {
+            gpt=target==DesktopApp.ChatGpt;
+            otherApp=gpt ? (Func<string,bool>)Installation.Owns : Installation.OwnsGpt;
+        }
 
         // Keep birth times for descendants that become orphans during shutdown.
         internal List<Node> Scan(Dictionary<int,long> known)
@@ -122,21 +170,30 @@ namespace ClaudeControl
                     using (var h = Native.OpenProcess(0x1000, false, entry.Id)) {
                         long birth, exit, kernel, user, prior;
                         if (h.IsInvalid || !Native.GetProcessTimes(h, out birth, out exit, out kernel, out user)) {
-                            if (checkNode && Regex.IsMatch(entry.Name, @"^(claude|claude-ssh-(broker|proxy|askpass)|claude-make-data-folder)\.exe$", RegexOptions.IgnoreCase))
+                            if ((gpt && String.Equals(entry.Name,"ChatGPT.exe",StringComparison.OrdinalIgnoreCase)) ||
+                                (checkNode && Regex.IsMatch(entry.Name, @"^(claude|claude-ssh-(broker|proxy|askpass)|claude-make-data-folder)\.exe$", RegexOptions.IgnoreCase)))
                                 nodes[entry.Id] = new Node { Id=entry.Id, Name=entry.Name, Unverified=true };
                             continue;
                         }
                         bool remembered = known != null && known.TryGetValue(entry.Id, out prior) && prior == birth;
                         buffer.Clear();
                         int size = buffer.Capacity;
-                        bool own = Native.QueryFullProcessImageNameW(h, 0, buffer, ref size) && owns(buffer.ToString());
+                        string path=Native.QueryFullProcessImageNameW(h, 0, buffer, ref size) ? buffer.ToString() : "";
+                        bool own=path.Length>0 && owns(path);
+                        if (otherApp!=null && Native.IsGptWebView(h,entry.Name)) {
+                            if (!gpt) continue;
+                            own=true;
+                        }
+                        if (!own && otherApp!=null && (SharedHosts.Contains(entry.Name) || (path.Length>0 && otherApp(path)))) continue;
+                        if (gpt && path.EndsWith(@"\app\Codex.exe",StringComparison.OrdinalIgnoreCase)) continue;
                         nodes[entry.Id] = new Node { Id=entry.Id, Parent=entry.Parent, Birth=birth, Session=sid, Name=entry.Name, Owned=own || remembered,
-                            Unverified=checkNode && !own && !remembered && String.Equals(entry.Name,"claude.exe",StringComparison.OrdinalIgnoreCase) };
+                            Unverified=!own && !remembered && ((checkNode && String.Equals(entry.Name,"claude.exe",StringComparison.OrdinalIgnoreCase))
+                                || (gpt && String.Equals(entry.Name,"ChatGPT.exe",StringComparison.OrdinalIgnoreCase))) };
                     }
                 } while (Native.Process32NextW(snapshot, ref entry));
                 if (Marshal.GetLastWin32Error() != 18) throw new Win32Exception();
             }
-            if (checkNode) lock (nodeLock) { MarkNodeScripts(nodes); }
+            if (checkNode || gpt) lock (nodeLock) { MarkNodeScripts(nodes); }
             var targets = new List<Node>();
             foreach (Node node in nodes.Values) {
                 Node cursor = node, parent;
@@ -164,14 +221,17 @@ namespace ClaudeControl
                     Node n;
                     if (!possible.TryGetValue(Convert.ToInt32(row["ProcessId"]), out n)) continue;
                     string cmd = row["CommandLine"] as string;
-                    if (String.IsNullOrEmpty(cmd)) { n.Unverified=true; continue; }
+                    if (String.IsNullOrEmpty(cmd)) { n.Unverified=checkNode; continue; }
                     // WMI exposes microseconds, FILETIME uses 100 ns.
                     string raw=(string)row["CreationDate"];
                     var local=DateTime.ParseExact(raw.Substring(0,21),"yyyyMMddHHmmss.ffffff",CultureInfo.InvariantCulture);
                     var offset=TimeSpan.FromMinutes(Int32.Parse(raw.Substring(21),CultureInfo.InvariantCulture));
                     long stamp=new DateTimeOffset(local,offset).UtcDateTime.ToFileTimeUtc();
                     if (Math.Abs(stamp-n.Birth)>=10) continue;
-                    if (Installation.LegacyNode(cmd)) n.Owned=true;
+                    if (Installation.LegacyNode(cmd)) {
+                        if (gpt) nodes.Remove(n.Id);
+                        else n.Owned=true;
+                    }
                     else excludedNodes[n.Id]=n.Birth;
                 }
             }
