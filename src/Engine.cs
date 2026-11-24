@@ -16,7 +16,7 @@ using Microsoft.Win32.SafeHandles;
 
 namespace ClaudeControl
 {
-    internal enum DesktopApp { Claude, ChatGpt }
+    internal enum DesktopApp { Claude, ChatGpt, Antigravity }
 
     internal static class Installation
     {
@@ -50,6 +50,37 @@ namespace ClaudeControl
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         private static readonly string Profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         private static readonly string ProgramFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        private static readonly string[] AntigravityRoots = {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Antigravity"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "antigravity-updater"),
+            Path.Combine(Environment.GetEnvironmentVariable("ProgramW6432") ?? ProgramFiles, "Antigravity"),
+            Path.Combine(Environment.Is64BitOperatingSystem ? Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) : ProgramFiles, "Antigravity")
+        };
+        private static bool IsAntigravityProduct(string exe)
+        {
+            try {
+                if (!File.Exists(exe)) return false;
+                var info=FileVersionInfo.GetVersionInfo(exe);
+                return String.Equals(info.ProductName,"Antigravity",StringComparison.OrdinalIgnoreCase)
+                    && (String.Equals(info.CompanyName,"Google",StringComparison.OrdinalIgnoreCase)
+                        || String.Equals(info.CompanyName,"Google LLC",StringComparison.OrdinalIgnoreCase));
+            } catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
+        }
+        internal static bool OwnsAntigravity(string path)
+        {
+            if (AntigravityRoots.Any(root=>path.StartsWith(root+"\\",StringComparison.OrdinalIgnoreCase))) return true;
+            if (String.Equals(Path.GetFileName(path),"Antigravity.exe",StringComparison.OrdinalIgnoreCase)) return IsAntigravityProduct(path);
+            // A custom install can leave a bundled helper running after its parent exits.
+            int resources=path.IndexOf(@"\resources\",StringComparison.OrdinalIgnoreCase);
+            return resources>0 && IsAntigravityProduct(Path.Combine(path.Substring(0,resources),"Antigravity.exe"));
+        }
+        internal static DesktopApp? Identify(string path)
+        {
+            if (Owns(path)) return DesktopApp.Claude;
+            if (OwnsGpt(path)) return DesktopApp.ChatGpt;
+            if (OwnsAntigravity(path)) return DesktopApp.Antigravity;
+            return null;
+        }
         private static readonly string[] Roots = {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AnthropicClaude"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Claude"),
@@ -138,8 +169,8 @@ namespace ClaudeControl
         private readonly int self = Process.GetCurrentProcess().Id;
         private readonly int session;
         private readonly bool checkNode;
-        private readonly Func<string,bool> otherApp;
-        private readonly bool gpt;
+        private readonly DesktopApp? desktop;
+        private readonly string primaryImage;
         // These executables can broker launches for many independent desktop apps.
         private static readonly HashSet<string> SharedHosts=new HashSet<string>(StringComparer.OrdinalIgnoreCase) {
             "explorer.exe","sihost.exe","svchost.exe","RuntimeBroker.exe","ApplicationFrameHost.exe","taskhostw.exe",
@@ -150,10 +181,10 @@ namespace ClaudeControl
         internal ProcessTree(Func<string,bool> owns, int session, bool checkNode)
         { this.owns = owns; this.session = session; this.checkNode = checkNode; }
         internal ProcessTree(DesktopApp target)
-            : this(target==DesktopApp.ChatGpt ? (Func<string,bool>)Installation.OwnsGpt : Installation.Owns, -1, target==DesktopApp.Claude)
+            : this(null, -1, target==DesktopApp.Claude)
         {
-            gpt=target==DesktopApp.ChatGpt;
-            otherApp=gpt ? (Func<string,bool>)Installation.Owns : Installation.OwnsGpt;
+            desktop=target;
+            primaryImage=target.ToString()+".exe";
         }
 
         // Keep birth times for descendants that become orphans during shutdown.
@@ -170,7 +201,7 @@ namespace ClaudeControl
                     using (var h = Native.OpenProcess(0x1000, false, entry.Id)) {
                         long birth, exit, kernel, user, prior;
                         if (h.IsInvalid || !Native.GetProcessTimes(h, out birth, out exit, out kernel, out user)) {
-                            if ((gpt && String.Equals(entry.Name,"ChatGPT.exe",StringComparison.OrdinalIgnoreCase)) ||
+                            if (String.Equals(entry.Name,primaryImage,StringComparison.OrdinalIgnoreCase) ||
                                 (checkNode && Regex.IsMatch(entry.Name, @"^(claude|claude-ssh-(broker|proxy|askpass)|claude-make-data-folder)\.exe$", RegexOptions.IgnoreCase)))
                                 nodes[entry.Id] = new Node { Id=entry.Id, Name=entry.Name, Unverified=true };
                             continue;
@@ -179,21 +210,23 @@ namespace ClaudeControl
                         buffer.Clear();
                         int size = buffer.Capacity;
                         string path=Native.QueryFullProcessImageNameW(h, 0, buffer, ref size) ? buffer.ToString() : "";
-                        bool own=path.Length>0 && owns(path);
-                        if (otherApp!=null && Native.IsGptWebView(h,entry.Name)) {
-                            if (!gpt) continue;
-                            own=true;
+                        bool own;
+                        if (desktop.HasValue) {
+                            var owner=Native.IsGptWebView(h,entry.Name) ? DesktopApp.ChatGpt : Installation.Identify(path);
+                            if (owner.HasValue && owner!=desktop) continue;
+                            own=owner==desktop;
+                            if (!own && SharedHosts.Contains(entry.Name)) continue;
+                            if (desktop!=DesktopApp.Claude && path.EndsWith(@"\app\Codex.exe",StringComparison.OrdinalIgnoreCase)) continue;
+                        } else {
+                            own=path.Length>0 && owns(path);
                         }
-                        if (!own && otherApp!=null && (SharedHosts.Contains(entry.Name) || (path.Length>0 && otherApp(path)))) continue;
-                        if (gpt && path.EndsWith(@"\app\Codex.exe",StringComparison.OrdinalIgnoreCase)) continue;
                         nodes[entry.Id] = new Node { Id=entry.Id, Parent=entry.Parent, Birth=birth, Session=sid, Name=entry.Name, Owned=own || remembered,
-                            Unverified=!own && !remembered && ((checkNode && String.Equals(entry.Name,"claude.exe",StringComparison.OrdinalIgnoreCase))
-                                || (gpt && String.Equals(entry.Name,"ChatGPT.exe",StringComparison.OrdinalIgnoreCase))) };
+                            Unverified=!own && !remembered && String.Equals(entry.Name,primaryImage,StringComparison.OrdinalIgnoreCase) };
                     }
                 } while (Native.Process32NextW(snapshot, ref entry));
                 if (Marshal.GetLastWin32Error() != 18) throw new Win32Exception();
             }
-            if (checkNode || gpt) lock (nodeLock) { MarkNodeScripts(nodes); }
+            if (checkNode || desktop.HasValue) lock (nodeLock) { MarkNodeScripts(nodes); }
             var targets = new List<Node>();
             foreach (Node node in nodes.Values) {
                 Node cursor = node, parent;
@@ -229,7 +262,7 @@ namespace ClaudeControl
                     long stamp=new DateTimeOffset(local,offset).UtcDateTime.ToFileTimeUtc();
                     if (Math.Abs(stamp-n.Birth)>=10) continue;
                     if (Installation.LegacyNode(cmd)) {
-                        if (gpt) nodes.Remove(n.Id);
+                        if (!checkNode) nodes.Remove(n.Id);
                         else n.Owned=true;
                     }
                     else excludedNodes[n.Id]=n.Birth;

@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -15,10 +17,8 @@ namespace ClaudeControl
     internal sealed class FloatingControl
     {
         internal readonly Window Badge = Surface(99, 99, "应用悬浮标");
-        private const double FlyoutHeight = 104;
-        internal readonly Window Flyout = Surface(142, FlyoutHeight, "应用快捷操作");
-        private readonly Button stop = new Button();
-        private readonly Button stopGpt = new Button();
+        internal readonly Window Flyout;
+        private readonly Dictionary<DesktopApp,Button> buttons=new Dictionary<DesktopApp,Button>();
         private readonly Shapes.Ellipse lamp = new Shapes.Ellipse { Width=7, Height=7, Margin=new Thickness(5,1,0,0) };
         private readonly DispatcherTimer hover = new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(220) };
         private readonly Action<int,int> save;
@@ -34,7 +34,8 @@ namespace ClaudeControl
                 ResizeMode=ResizeMode.NoResize, ShowActivated=false, WindowStartupLocation=WindowStartupLocation.Manual,
                 FontFamily=new FontFamily("Microsoft YaHei UI, Segoe UI") };
         }
-        internal FloatingControl(Style action, Action closeClaude, Action closeGpt, Action showWindow, Action<int,int> savePosition)
+        internal FloatingControl(Style action, KeyValuePair<DesktopApp,string>[] choices, Action<DesktopApp> closeApp,
+            Action showWindow, Action<int,int> savePosition)
         {
             save = savePosition;
             var content = new StackPanel { VerticalAlignment=VerticalAlignment.Center, HorizontalAlignment=HorizontalAlignment.Center };
@@ -43,7 +44,7 @@ namespace ClaudeControl
             glyph.Children.Add(new Shapes.Rectangle { Width=11, Height=11, RadiusX=2, RadiusY=2, Fill=Color("#1B2614") });
             content.Children.Add(glyph);
             var label = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center };
-            label.Children.Add(new TextBlock { Text="Claude / GPT", Foreground=Color("#141C10"), FontSize=12, FontWeight=FontWeights.SemiBold });
+            label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=12, FontWeight=FontWeights.SemiBold });
             label.Children.Add(lamp);
             content.Children.Add(label);
             var tile = new Border { Width=99, Height=99, Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(24),
@@ -53,18 +54,17 @@ namespace ClaudeControl
                 var scale=PresentationSource.FromVisual(Badge).CompositionTarget.TransformToDevice;
                 Badge.Width=99/scale.M11; Badge.Height=99/scale.M22;
             };
-            stop.Style=action;
-            stop.Content="关闭 Claude";
-            stop.Margin=new Thickness(1);
-            stop.Click += delegate { closeClaude(); };
-            stopGpt.Style=action;
-            stopGpt.Content="关闭 GPT";
-            stopGpt.Margin=new Thickness(1,1,1,0);
-            stop.Padding=stopGpt.Padding=new Thickness(8,0,8,0);
-            stopGpt.Click += delegate { closeGpt(); };
-            var actions=new System.Windows.Controls.Primitives.UniformGrid { Rows=2, Columns=1, Background=Brushes.Transparent };
-            actions.Children.Add(stop);
-            actions.Children.Add(stopGpt);
+            Flyout=Surface(152,52*choices.Length,"应用快捷操作");
+            var actions=new System.Windows.Controls.Primitives.UniformGrid { Rows=choices.Length, Columns=1, Background=Brushes.Transparent };
+            foreach (var choice in choices) {
+                var app=choice.Key;
+                var button=new Button { Style=action, Content=choice.Value, Padding=new Thickness(8,0,8,0),
+                    Margin=new Thickness(1,1,1,actions.Children.Count==choices.Length-1 ? 0 : 1) };
+                AutomationProperties.SetName(button,choice.Value);
+                button.Click+=delegate { closeApp(app); };
+                buttons.Add(app,button);
+                actions.Children.Add(button);
+            }
             Flyout.Content=actions;
             Badge.MouseEnter += delegate { if (!pressed) OpenFlyout(); };
             Badge.MouseLeave += delegate { hover.Start(); };
@@ -121,8 +121,9 @@ namespace ClaudeControl
             var b=Bounds(Badge);
             var area=Forms.Screen.FromRectangle(b).WorkingArea;
             double scaleY=PresentationSource.FromVisual(Badge).CompositionTarget.TransformToDevice.M22;
-            // At the top of the work area, fit both rows above the same bottom edge.
-            Flyout.Height=Math.Min(FlyoutHeight,(b.Bottom-area.Top)/scaleY);
+            // At the top of the work area, fit all rows above the same bottom edge.
+            Flyout.Height=Math.Min(52*buttons.Count,(b.Bottom-area.Top)/scaleY);
+            foreach (var button in buttons.Values) button.FontSize=Math.Min(15,(Flyout.Height/buttons.Count-2)*0.68);
             Flyout.Show();
             Flyout.UpdateLayout();
             var f=Bounds(Flyout);
@@ -131,9 +132,10 @@ namespace ClaudeControl
         }
         internal void Update(DesktopApp? stopping, bool running)
         {
-            stop.IsEnabled=stopGpt.IsEnabled=!stopping.HasValue;
-            stop.Content=stopping==DesktopApp.Claude ? "正在关闭…" : "关闭 Claude";
-            stopGpt.Content=stopping==DesktopApp.ChatGpt ? "正在关闭…" : "关闭 GPT";
+            foreach (var pair in buttons) {
+                pair.Value.IsEnabled=!stopping.HasValue;
+                pair.Value.Content=stopping==pair.Key ? "正在关闭…" : AutomationProperties.GetName(pair.Value);
+            }
             lamp.Fill=Color(running ? "#24331A" : "#DCE5D1");
         }
         internal void Dispose()
