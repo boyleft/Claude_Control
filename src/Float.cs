@@ -15,7 +15,8 @@ namespace ClaudeControl
     internal sealed class FloatingControl
     {
         internal readonly Window Badge = Surface(99, 99, "应用悬浮标");
-        internal readonly Window Flyout = Surface(142, 104, "应用快捷操作");
+        private const double FlyoutHeight = 104;
+        internal readonly Window Flyout = Surface(142, FlyoutHeight, "应用快捷操作");
         private readonly Button stop = new Button();
         private readonly Button stopGpt = new Button();
         private readonly Shapes.Ellipse lamp = new Shapes.Ellipse { Width=7, Height=7, Margin=new Thickness(5,1,0,0) };
@@ -58,7 +59,8 @@ namespace ClaudeControl
             stop.Click += delegate { closeClaude(); };
             stopGpt.Style=action;
             stopGpt.Content="关闭 GPT";
-            stopGpt.Margin=new Thickness(1);
+            stopGpt.Margin=new Thickness(1,1,1,0);
+            stop.Padding=stopGpt.Padding=new Thickness(8,0,8,0);
             stopGpt.Click += delegate { closeGpt(); };
             var actions=new System.Windows.Controls.Primitives.UniformGrid { Rows=2, Columns=1, Background=Brushes.Transparent };
             actions.Children.Add(stop);
@@ -118,10 +120,14 @@ namespace ClaudeControl
             hover.Stop();
             var b=Bounds(Badge);
             var area=Forms.Screen.FromRectangle(b).WorkingArea;
+            double scaleY=PresentationSource.FromVisual(Badge).CompositionTarget.TransformToDevice.M22;
+            // At the top of the work area, fit both rows above the same bottom edge.
+            Flyout.Height=Math.Min(FlyoutHeight,(b.Bottom-area.Top)/scaleY);
             Flyout.Show();
+            Flyout.UpdateLayout();
             var f=Bounds(Flyout);
             int x=b.Right+3+f.Width<=area.Right ? b.Right+3 : b.Left-f.Width-3;
-            Move(Flyout, x, b.Top+(b.Height-f.Height)/2, area);
+            Move(Flyout, x, b.Bottom-f.Height, area);
         }
         internal void Update(DesktopApp? stopping, bool running)
         {
