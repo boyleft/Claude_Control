@@ -21,11 +21,11 @@ namespace ClaudeControl
         internal readonly Window Badge;
         internal readonly Window Flyout;
         private readonly Dictionary<DesktopApp,Button> buttons=new Dictionary<DesktopApp,Button>();
-        private readonly Shapes.Ellipse lamp = new Shapes.Ellipse { Width=7, Height=7, Margin=new Thickness(5,1,0,0) };
+        private readonly Shapes.Ellipse lamp = new Shapes.Ellipse { Width=5, Height=5, Margin=new Thickness(3,1,0,0) };
         private readonly DispatcherTimer hover = new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(220) };
         private readonly Action<int,int> save;
-        private readonly TextBlock clock = new TextBlock { FontSize=20, FontWeight=FontWeights.SemiBold, TextAlignment=TextAlignment.Center };
-        private readonly TextBlock clockDate = new TextBlock { FontSize=11, TextAlignment=TextAlignment.Center };
+        private readonly TextBlock clock = new TextBlock { FontSize=16, FontWeight=FontWeights.SemiBold, TextAlignment=TextAlignment.Center };
+        private readonly TextBlock clockDate = new TextBlock { FontSize=9, TextAlignment=TextAlignment.Center };
         private Drawing.Point anchor;
         private Drawing.Rectangle origin;
         private bool pressed;
@@ -42,29 +42,21 @@ namespace ClaudeControl
             Action showWindow, Action<int,int> savePosition)
         {
             save = savePosition;
-            Badge=Surface(180,ActionHeight,"应用悬浮标");
+            Badge=Surface(100,ActionHeight,"应用悬浮标");
             Flyout=Surface(152,ActionHeight*choices.Length+ActionGap*(choices.Length-1),"应用快捷操作");
-            var content = new Grid { VerticalAlignment=VerticalAlignment.Center };
-            content.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
-            content.ColumnDefinitions.Add(new ColumnDefinition());
-            var glyph = new Grid { Width=16, Height=16 };
-            glyph.Children.Add(new Shapes.Ellipse { Stroke=Color("#28361F"), StrokeThickness=2 });
-            glyph.Children.Add(new Shapes.Rectangle { Width=5, Height=5, RadiusX=1, RadiusY=1, Fill=Color("#1B2614") });
-            var label = new StackPanel { VerticalAlignment=VerticalAlignment.Center, Margin=new Thickness(0,0,10,0) };
-            var indicator = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center };
-            indicator.Children.Add(glyph);
-            indicator.Children.Add(lamp);
-            label.Children.Add(indicator);
-            label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=11, FontWeight=FontWeights.SemiBold,
-                TextAlignment=TextAlignment.Center, Margin=new Thickness(0,2,0,0) });
+            var content = new StackPanel { VerticalAlignment=VerticalAlignment.Center };
+            var glyph = new Grid { Width=10, Height=10, VerticalAlignment=VerticalAlignment.Center, Margin=new Thickness(0,0,4,0) };
+            glyph.Children.Add(new Shapes.Ellipse { Stroke=Color("#28361F"), StrokeThickness=1.3 });
+            glyph.Children.Add(new Shapes.Rectangle { Width=3, Height=3, RadiusX=0.6, RadiusY=0.6, Fill=Color("#1B2614") });
+            var label = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center };
+            label.Children.Add(glyph);
+            label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=10, FontWeight=FontWeights.SemiBold });
+            label.Children.Add(lamp);
             content.Children.Add(label);
-            var time = new StackPanel { VerticalAlignment=VerticalAlignment.Center };
-            time.Children.Add(clock);
-            time.Children.Add(clockDate);
-            Grid.SetColumn(time,1);
-            content.Children.Add(time);
+            content.Children.Add(clock);
+            content.Children.Add(clockDate);
             foreach(var text in new[]{clock,clockDate}) text.Foreground=Color("#141C10");
-            Badge.Content = new Border { Padding=new Thickness(8,4,8,4), Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(10),
+            Badge.Content = new Border { Padding=new Thickness(6,1,6,1), Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(10),
                 BorderBrush=Color("#5B6D46"), BorderThickness=new Thickness(1), Cursor=Cursors.SizeAll };
             var actions=new StackPanel { Background=Brushes.Transparent };
             foreach (var choice in choices) {
