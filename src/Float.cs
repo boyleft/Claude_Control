@@ -17,14 +17,15 @@ namespace ClaudeControl
 {
     internal sealed class FloatingControl
     {
+        private const double ActionHeight=52, ActionGap=2;
         internal readonly Window Badge;
         internal readonly Window Flyout;
         private readonly Dictionary<DesktopApp,Button> buttons=new Dictionary<DesktopApp,Button>();
         private readonly Shapes.Ellipse lamp = new Shapes.Ellipse { Width=7, Height=7, Margin=new Thickness(5,1,0,0) };
         private readonly DispatcherTimer hover = new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(220) };
         private readonly Action<int,int> save;
-        private readonly TextBlock clock = new TextBlock { FontSize=30, FontWeight=FontWeights.SemiBold, TextAlignment=TextAlignment.Center };
-        private readonly TextBlock clockDate = new TextBlock { FontSize=16, TextAlignment=TextAlignment.Center, Margin=new Thickness(0,6,0,0) };
+        private readonly TextBlock clock = new TextBlock { FontSize=20, FontWeight=FontWeights.SemiBold, TextAlignment=TextAlignment.Center };
+        private readonly TextBlock clockDate = new TextBlock { FontSize=11, TextAlignment=TextAlignment.Center };
         private Drawing.Point anchor;
         private Drawing.Rectangle origin;
         private bool pressed;
@@ -41,28 +42,35 @@ namespace ClaudeControl
             Action showWindow, Action<int,int> savePosition)
         {
             save = savePosition;
-            double height=52*choices.Length;
-            Badge=Surface(180,height,"应用悬浮标");
-            Flyout=Surface(152,height,"应用快捷操作");
-            var content = new StackPanel { VerticalAlignment=VerticalAlignment.Center };
-            var glyph = new Grid { Width=20, Height=20, Margin=new Thickness(0,0,6,0) };
+            Badge=Surface(180,ActionHeight,"应用悬浮标");
+            Flyout=Surface(152,ActionHeight*choices.Length+ActionGap*(choices.Length-1),"应用快捷操作");
+            var content = new Grid { VerticalAlignment=VerticalAlignment.Center };
+            content.ColumnDefinitions.Add(new ColumnDefinition { Width=GridLength.Auto });
+            content.ColumnDefinitions.Add(new ColumnDefinition());
+            var glyph = new Grid { Width=16, Height=16 };
             glyph.Children.Add(new Shapes.Ellipse { Stroke=Color("#28361F"), StrokeThickness=2 });
             glyph.Children.Add(new Shapes.Rectangle { Width=5, Height=5, RadiusX=1, RadiusY=1, Fill=Color("#1B2614") });
-            var label = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center, Margin=new Thickness(0,0,0,12) };
-            label.Children.Add(glyph);
-            label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=14, FontWeight=FontWeights.SemiBold });
-            label.Children.Add(lamp);
+            var label = new StackPanel { VerticalAlignment=VerticalAlignment.Center, Margin=new Thickness(0,0,10,0) };
+            var indicator = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center };
+            indicator.Children.Add(glyph);
+            indicator.Children.Add(lamp);
+            label.Children.Add(indicator);
+            label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=11, FontWeight=FontWeights.SemiBold,
+                TextAlignment=TextAlignment.Center, Margin=new Thickness(0,2,0,0) });
             content.Children.Add(label);
-            content.Children.Add(clock);
-            content.Children.Add(clockDate);
+            var time = new StackPanel { VerticalAlignment=VerticalAlignment.Center };
+            time.Children.Add(clock);
+            time.Children.Add(clockDate);
+            Grid.SetColumn(time,1);
+            content.Children.Add(time);
             foreach(var text in new[]{clock,clockDate}) text.Foreground=Color("#141C10");
-            Badge.Content = new Border { Padding=new Thickness(12), Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(20),
+            Badge.Content = new Border { Padding=new Thickness(8,4,8,4), Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(10),
                 BorderBrush=Color("#5B6D46"), BorderThickness=new Thickness(1), Cursor=Cursors.SizeAll };
-            var actions=new System.Windows.Controls.Primitives.UniformGrid { Rows=choices.Length, Columns=1, Background=Brushes.Transparent };
+            var actions=new StackPanel { Background=Brushes.Transparent };
             foreach (var choice in choices) {
                 var app=choice.Key;
-                var button=new Button { Style=action, Content=choice.Value, Padding=new Thickness(8,0,8,0),
-                    Margin=new Thickness(1,actions.Children.Count==0 ? 0 : 1,1,actions.Children.Count==choices.Length-1 ? 0 : 1) };
+                var button=new Button { Style=action, Content=choice.Value, Height=ActionHeight, Padding=new Thickness(8,0,8,0),
+                    Margin=new Thickness(1,0,1,actions.Children.Count==choices.Length-1 ? 0 : ActionGap) };
                 AutomationProperties.SetName(button,choice.Value);
                 button.Click+=delegate { closeApp(app); };
                 buttons.Add(app,button);
@@ -90,7 +98,7 @@ namespace ClaudeControl
                 var threshold=Forms.SystemInformation.DragSize;
                 if (!dragged && Math.Abs(p.X-anchor.X)*2<threshold.Width && Math.Abs(p.Y-anchor.Y)*2<threshold.Height) return;
                 dragged=true;
-                Move(Badge, origin.X+p.X-anchor.X, origin.Y+p.Y-anchor.Y, Forms.Screen.FromPoint(p).WorkingArea);
+                MoveBadge(origin.X+p.X-anchor.X, origin.Y+p.Y-anchor.Y, Forms.Screen.FromPoint(p).WorkingArea);
             };
             Badge.MouseLeftButtonUp += delegate {
                 if (!pressed) return;
@@ -119,7 +127,7 @@ namespace ClaudeControl
             var area=Forms.Screen.PrimaryScreen.WorkingArea;
             if (x.HasValue && y.HasValue) area=Forms.Screen.FromPoint(new Drawing.Point(x.Value,y.Value)).WorkingArea;
             var size=Bounds(Badge);
-            Move(Badge, x ?? area.Right-size.Width-22, y ?? area.Top+80, area);
+            MoveBadge(x ?? area.Right-size.Width-22, y ?? area.Top+80, area);
             if (Badge.IsMouseOver) OpenFlyout();
         }
         private void OpenFlyout()
@@ -128,7 +136,8 @@ namespace ClaudeControl
             hover.Stop();
             var b=Bounds(Badge);
             var area=Forms.Screen.FromRectangle(b).WorkingArea;
-            Flyout.Height=Badge.ActualHeight;
+            MoveBadge(b.X,b.Y,area);
+            b=Bounds(Badge);
             Flyout.Show();
             Flyout.UpdateLayout();
             var f=Bounds(Flyout);
@@ -154,6 +163,13 @@ namespace ClaudeControl
         {
             Rect r; GetWindowRect(new WindowInteropHelper(w).Handle, out r);
             return Drawing.Rectangle.FromLTRB(r.Left,r.Top,r.Right,r.Bottom);
+        }
+        private void MoveBadge(int x, int y, Drawing.Rectangle area)
+        {
+            // Reserve space above the badge for the bottom-aligned menu without shrinking its buttons.
+            double scale=PresentationSource.FromVisual(Badge).CompositionTarget.TransformToDevice.M22;
+            int headroom=(int)Math.Ceiling((Flyout.Height-Badge.Height)*scale);
+            Move(Badge,x,Math.Max(y,area.Top+headroom),area);
         }
         private static void Move(Window w, int x, int y, Drawing.Rectangle area)
         {
