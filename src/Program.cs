@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
@@ -19,7 +20,7 @@ using Shapes = System.Windows.Shapes;
 
 [assembly: AssemblyTitle("AI 应用控制台")]
 [assembly: AssemblyProduct("AI 应用控制台")]
-[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
 namespace ClaudeControl
 {
     internal static class Program
@@ -58,6 +59,10 @@ namespace ClaudeControl
         private readonly Target claude;
         private readonly Target[] targets;
         private readonly DispatcherTimer timer=new DispatcherTimer { Interval=TimeSpan.FromSeconds(5) };
+        private readonly DispatcherTimer clockTimer=new DispatcherTimer { Interval=TimeSpan.FromSeconds(1) };
+        private readonly ComboBox timeZones;
+        private readonly TextBlock convertedTime, timeOffset;
+        private TimeZoneInfo selectedZone;
         private readonly CheckBox toggle;
         private readonly TextBlock status, count, service, details, feedback;
         private const string Prefs=@"HKEY_CURRENT_USER\Software\ClaudeControlDesk";
@@ -74,6 +79,7 @@ namespace ClaudeControl
         {
             using (var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("Main.xaml"))
                 window=(Window)XamlReader.Load(stream);
+            window.MaxHeight=SystemParameters.WorkArea.Height;
             icon=Drawing.Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location);
             window.Icon=Imaging.CreateBitmapSourceFromHIcon(icon.Handle,Int32Rect.Empty,System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
             toggle=Find<CheckBox>("FloatToggle"); status=Find<TextBlock>("Status");
@@ -87,6 +93,23 @@ namespace ClaudeControl
                 app=>RequestStop(targets.First(t=>t.App==app)),Show,delegate(int left,int top){
                 x=left; y=top; Write("X",left); Write("Y",top);
             });
+            timeZones=Find<ComboBox>("TimeZoneSelect");
+            convertedTime=Find<TextBlock>("ConvertedTime"); timeOffset=Find<TextBlock>("TimeOffset");
+            var zones=TimeZoneInfo.GetSystemTimeZones();
+            string savedZone=Registry.GetValue(Prefs,"TimeZoneId",null) as string;
+            selectedZone=zones.FirstOrDefault(z=>z.Id==savedZone)
+                ?? zones.FirstOrDefault(z=>z.Id==TimeZoneInfo.Local.Id) ?? TimeZoneInfo.Local;
+            timeZones.ItemsSource=zones;
+            timeZones.SelectedItem=selectedZone;
+            timeZones.SelectionChanged+=delegate {
+                var zone=timeZones.SelectedItem as TimeZoneInfo;
+                if (zone==null) return;
+                selectedZone=zone;
+                Registry.SetValue(Prefs,"TimeZoneId",zone.Id,RegistryValueKind.String);
+                RefreshClock();
+            };
+            clockTimer.Tick+=delegate { RefreshClock(); };
+            RefreshClock(); clockTimer.Start();
             trayFloat=(Forms.ToolStripMenuItem)menu.Items.Add("桌面悬浮标",null,delegate { toggle.IsChecked=toggle.IsChecked!=true; });
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("退出控制台",null,delegate { Exit(); });
@@ -96,6 +119,15 @@ namespace ClaudeControl
             window.Closing += Closing;
             window.Loaded += delegate { toggle.IsChecked=Pref("Float")==1; ReadState(); timer.Start(); };
             timer.Tick += delegate { ReadState(); };
+        }
+        private void RefreshClock()
+        {
+            // DateTimeOffset.Now captures the local offset, including daylight saving.
+            var time=TimeZoneInfo.ConvertTime(DateTimeOffset.Now,selectedZone);
+            string offset="UTC"+time.ToString("zzz",CultureInfo.InvariantCulture);
+            convertedTime.Text=time.ToString("yyyy-MM-dd  HH:mm:ss",CultureInfo.InvariantCulture);
+            timeOffset.Text=offset+(selectedZone.IsDaylightSavingTime(time)?" · 夏令时":"");
+            floating.UpdateClock(time);
         }
         private void ChangeFloat(object sender,RoutedEventArgs e)
         {
@@ -262,12 +294,12 @@ namespace ClaudeControl
         private void Exit()
         {
             if (busy) { Show(); return; }
-            quitting=true; timer.Stop(); tray.Visible=false;
+            quitting=true; timer.Stop(); clockTimer.Stop(); tray.Visible=false;
             Application.Current.Shutdown();
         }
         public void Dispose()
         {
-            timer.Stop(); tray.Visible=false; tray.Dispose(); menu.Dispose(); icon.Dispose();
+            timer.Stop(); clockTimer.Stop(); tray.Visible=false; tray.Dispose(); menu.Dispose(); icon.Dispose();
         }
     }
 }

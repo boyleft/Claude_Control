@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -16,12 +17,15 @@ namespace ClaudeControl
 {
     internal sealed class FloatingControl
     {
-        internal readonly Window Badge = Surface(99, 99, "应用悬浮标");
+        internal readonly Window Badge = Surface(180, 148, "应用悬浮标");
         internal readonly Window Flyout;
         private readonly Dictionary<DesktopApp,Button> buttons=new Dictionary<DesktopApp,Button>();
         private readonly Shapes.Ellipse lamp = new Shapes.Ellipse { Width=7, Height=7, Margin=new Thickness(5,1,0,0) };
         private readonly DispatcherTimer hover = new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(220) };
         private readonly Action<int,int> save;
+        private readonly Border tile;
+        private readonly TextBlock clock = new TextBlock { FontSize=25, FontWeight=FontWeights.SemiBold, TextAlignment=TextAlignment.Center };
+        private readonly TextBlock clockDate = new TextBlock { FontSize=12, TextAlignment=TextAlignment.Center };
         private Drawing.Point anchor;
         private Drawing.Rectangle origin;
         private bool pressed;
@@ -38,22 +42,22 @@ namespace ClaudeControl
             Action showWindow, Action<int,int> savePosition)
         {
             save = savePosition;
-            var content = new StackPanel { VerticalAlignment=VerticalAlignment.Center, HorizontalAlignment=HorizontalAlignment.Center };
-            var glyph = new Grid { Width=35, Height=35, Margin=new Thickness(0,0,0,6) };
+            var content = new StackPanel();
+            var glyph = new Grid { Width=16, Height=16, Margin=new Thickness(0,0,6,0) };
             glyph.Children.Add(new Shapes.Ellipse { Stroke=Color("#28361F"), StrokeThickness=2 });
-            glyph.Children.Add(new Shapes.Rectangle { Width=11, Height=11, RadiusX=2, RadiusY=2, Fill=Color("#1B2614") });
-            content.Children.Add(glyph);
-            var label = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center };
+            glyph.Children.Add(new Shapes.Rectangle { Width=5, Height=5, RadiusX=1, RadiusY=1, Fill=Color("#1B2614") });
+            var label = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center, Margin=new Thickness(0,0,0,6) };
+            label.Children.Add(glyph);
             label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=12, FontWeight=FontWeights.SemiBold });
             label.Children.Add(lamp);
             content.Children.Add(label);
-            var tile = new Border { Width=99, Height=99, Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(24),
+            content.Children.Add(clock);
+            content.Children.Add(clockDate);
+            foreach(var text in new[]{clock,clockDate}) text.Foreground=Color("#141C10");
+            tile = new Border { Width=180, Padding=new Thickness(12), Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(20),
                 BorderBrush=Color("#5B6D46"), BorderThickness=new Thickness(1), Cursor=Cursors.SizeAll };
             Badge.Content=new Viewbox { Child=tile };
-            Badge.SourceInitialized += delegate {
-                var scale=PresentationSource.FromVisual(Badge).CompositionTarget.TransformToDevice;
-                Badge.Width=99/scale.M11; Badge.Height=99/scale.M22;
-            };
+            Badge.SourceInitialized += delegate { ResizeBadge(); };
             Flyout=Surface(152,52*choices.Length,"应用快捷操作");
             var actions=new System.Windows.Controls.Primitives.UniformGrid { Rows=choices.Length, Columns=1, Background=Brushes.Transparent };
             foreach (var choice in choices) {
@@ -101,6 +105,26 @@ namespace ClaudeControl
                 if (dragged) { var bounds=Bounds(Badge); save(bounds.X,bounds.Y); }
                 if (Badge.IsMouseOver) OpenFlyout();
             };
+        }
+        internal void UpdateClock(DateTimeOffset time)
+        {
+            clock.Text=time.ToString("HH:mm:ss",CultureInfo.InvariantCulture);
+            clockDate.Text=time.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);
+        }
+        private void ResizeBadge()
+        {
+            var source=PresentationSource.FromVisual(Badge);
+            if (source==null) return;
+            var previous=Bounds(Badge);
+            tile.Measure(new Size(Double.PositiveInfinity,Double.PositiveInfinity));
+            var scale=source.CompositionTarget.TransformToDevice;
+            int width=(int)Math.Ceiling(tile.DesiredSize.Width), height=(int)Math.Ceiling(tile.DesiredSize.Height);
+            Badge.Width=width/scale.M11; Badge.Height=height/scale.M22;
+            Badge.UpdateLayout();
+            if (Badge.IsVisible) {
+                Move(Badge,previous.X,previous.Bottom-height,Forms.Screen.FromRectangle(previous).WorkingArea);
+                if (Flyout!=null && Flyout.IsVisible) OpenFlyout();
+            }
         }
         internal void SetVisible(bool value, int? x, int? y)
         {
