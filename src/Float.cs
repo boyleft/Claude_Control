@@ -17,15 +17,14 @@ namespace ClaudeControl
 {
     internal sealed class FloatingControl
     {
-        internal readonly Window Badge = Surface(180, 148, "应用悬浮标");
+        internal readonly Window Badge;
         internal readonly Window Flyout;
         private readonly Dictionary<DesktopApp,Button> buttons=new Dictionary<DesktopApp,Button>();
         private readonly Shapes.Ellipse lamp = new Shapes.Ellipse { Width=7, Height=7, Margin=new Thickness(5,1,0,0) };
         private readonly DispatcherTimer hover = new DispatcherTimer { Interval=TimeSpan.FromMilliseconds(220) };
         private readonly Action<int,int> save;
-        private readonly Border tile;
-        private readonly TextBlock clock = new TextBlock { FontSize=25, FontWeight=FontWeights.SemiBold, TextAlignment=TextAlignment.Center };
-        private readonly TextBlock clockDate = new TextBlock { FontSize=12, TextAlignment=TextAlignment.Center };
+        private readonly TextBlock clock = new TextBlock { FontSize=30, FontWeight=FontWeights.SemiBold, TextAlignment=TextAlignment.Center };
+        private readonly TextBlock clockDate = new TextBlock { FontSize=16, TextAlignment=TextAlignment.Center, Margin=new Thickness(0,6,0,0) };
         private Drawing.Point anchor;
         private Drawing.Rectangle origin;
         private bool pressed;
@@ -42,28 +41,28 @@ namespace ClaudeControl
             Action showWindow, Action<int,int> savePosition)
         {
             save = savePosition;
-            var content = new StackPanel();
-            var glyph = new Grid { Width=16, Height=16, Margin=new Thickness(0,0,6,0) };
+            double height=52*choices.Length;
+            Badge=Surface(180,height,"应用悬浮标");
+            Flyout=Surface(152,height,"应用快捷操作");
+            var content = new StackPanel { VerticalAlignment=VerticalAlignment.Center };
+            var glyph = new Grid { Width=20, Height=20, Margin=new Thickness(0,0,6,0) };
             glyph.Children.Add(new Shapes.Ellipse { Stroke=Color("#28361F"), StrokeThickness=2 });
             glyph.Children.Add(new Shapes.Rectangle { Width=5, Height=5, RadiusX=1, RadiusY=1, Fill=Color("#1B2614") });
-            var label = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center, Margin=new Thickness(0,0,0,6) };
+            var label = new StackPanel { Orientation=Orientation.Horizontal, HorizontalAlignment=HorizontalAlignment.Center, Margin=new Thickness(0,0,0,12) };
             label.Children.Add(glyph);
-            label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=12, FontWeight=FontWeights.SemiBold });
+            label.Children.Add(new TextBlock { Text="应用控制", Foreground=Color("#141C10"), FontSize=14, FontWeight=FontWeights.SemiBold });
             label.Children.Add(lamp);
             content.Children.Add(label);
             content.Children.Add(clock);
             content.Children.Add(clockDate);
             foreach(var text in new[]{clock,clockDate}) text.Foreground=Color("#141C10");
-            tile = new Border { Width=180, Padding=new Thickness(12), Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(20),
+            Badge.Content = new Border { Padding=new Thickness(12), Child=content, Background=Color("#788C5D"), CornerRadius=new CornerRadius(20),
                 BorderBrush=Color("#5B6D46"), BorderThickness=new Thickness(1), Cursor=Cursors.SizeAll };
-            Badge.Content=new Viewbox { Child=tile };
-            Badge.SourceInitialized += delegate { ResizeBadge(); };
-            Flyout=Surface(152,52*choices.Length,"应用快捷操作");
             var actions=new System.Windows.Controls.Primitives.UniformGrid { Rows=choices.Length, Columns=1, Background=Brushes.Transparent };
             foreach (var choice in choices) {
                 var app=choice.Key;
                 var button=new Button { Style=action, Content=choice.Value, Padding=new Thickness(8,0,8,0),
-                    Margin=new Thickness(1,1,1,actions.Children.Count==choices.Length-1 ? 0 : 1) };
+                    Margin=new Thickness(1,actions.Children.Count==0 ? 0 : 1,1,actions.Children.Count==choices.Length-1 ? 0 : 1) };
                 AutomationProperties.SetName(button,choice.Value);
                 button.Click+=delegate { closeApp(app); };
                 buttons.Add(app,button);
@@ -111,21 +110,6 @@ namespace ClaudeControl
             clock.Text=time.ToString("HH:mm:ss",CultureInfo.InvariantCulture);
             clockDate.Text=time.ToString("yyyy-MM-dd",CultureInfo.InvariantCulture);
         }
-        private void ResizeBadge()
-        {
-            var source=PresentationSource.FromVisual(Badge);
-            if (source==null) return;
-            var previous=Bounds(Badge);
-            tile.Measure(new Size(Double.PositiveInfinity,Double.PositiveInfinity));
-            var scale=source.CompositionTarget.TransformToDevice;
-            int width=(int)Math.Ceiling(tile.DesiredSize.Width), height=(int)Math.Ceiling(tile.DesiredSize.Height);
-            Badge.Width=width/scale.M11; Badge.Height=height/scale.M22;
-            Badge.UpdateLayout();
-            if (Badge.IsVisible) {
-                Move(Badge,previous.X,previous.Bottom-height,Forms.Screen.FromRectangle(previous).WorkingArea);
-                if (Flyout!=null && Flyout.IsVisible) OpenFlyout();
-            }
-        }
         internal void SetVisible(bool value, int? x, int? y)
         {
             enabled=value;
@@ -144,10 +128,7 @@ namespace ClaudeControl
             hover.Stop();
             var b=Bounds(Badge);
             var area=Forms.Screen.FromRectangle(b).WorkingArea;
-            double scaleY=PresentationSource.FromVisual(Badge).CompositionTarget.TransformToDevice.M22;
-            // At the top of the work area, fit all rows above the same bottom edge.
-            Flyout.Height=Math.Min(52*buttons.Count,(b.Bottom-area.Top)/scaleY);
-            foreach (var button in buttons.Values) button.FontSize=Math.Min(15,(Flyout.Height/buttons.Count-2)*0.68);
+            Flyout.Height=Badge.ActualHeight;
             Flyout.Show();
             Flyout.UpdateLayout();
             var f=Bounds(Flyout);
